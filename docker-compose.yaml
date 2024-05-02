@@ -1,0 +1,101 @@
+version: "3.8"
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - 3000:3000
+      - 35729:35729
+    networks:
+      - frontend
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+      - FAST_REFRESH=false
+      - WDS_SOCKET_PORT=3000
+  
+  database:
+    image: mongo:7.0.7-jammy
+    container_name: mongodb
+    restart: unless-stopped
+    command: mongod --auth
+    environment:
+      MONGO_INITDB_ROOT_USERNAME_FILE: /run/secrets/mongodb_root_username
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongodb_root_password
+      MONGO_INITDB_DATABASE: webapp
+      MONGODB_DATA_DIR: /data/db
+    secrets:
+      - mongodb_root_username
+      - mongodb_root_password
+    volumes:
+      - mongodb:/data/db
+      - .secrets/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - backend
+    ports:
+      - 27017:27017
+  
+  graphdb:
+    image: neo4j:5.19.0
+    container_name: neo4j
+    restart: unless-stopped
+    ports:
+      - 7474:7474
+      - 7687:7687
+    environment:
+      NEO4J_AUTH_PATH: /run/secrets/neo4j_auth
+    secrets:
+      - neo4j_auth
+    volumes:
+      - neo4j:/data
+    networks:
+      - backend
+    healthcheck:
+      test: wget http://localhost:7474 || exit 1
+      interval: 1s
+      timeout: 10s
+      retries: 20
+      start_period: 3s
+    
+  backend:
+    build:
+      context: ./backend
+      target: runtime
+    command: --bind 0.0.0.0:5000 --reload
+    ports:
+      - 5000:5000
+    environment:
+      SECRETS_DOTENV_PATH: /run/secrets/flask_dotenv
+    secrets:
+      - flask_dotenv
+    depends_on:
+      database:
+        condition: service_started
+      graphdb:
+        condition: service_healthy
+    networks:
+      - frontend
+      - backend
+
+secrets:
+  mongodb_root_username:
+    file: .secrets/mongodb_root_username.txt
+  mongodb_root_password:
+    file: .secrets/mongodb_root_password.txt
+  neo4j_auth:
+    file: .secrets/neo4j_auth.txt
+  flask_dotenv:
+    file: .secrets/flask.env
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+
+volumes:
+  mongodb:
+    driver: local
+  neo4j:
+    driver: local
